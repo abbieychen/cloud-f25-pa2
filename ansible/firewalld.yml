@@ -1,41 +1,225 @@
-- name: Configure firewalld
-  hosts: all
+# ---
+# - name: Configure firewalld for Kubernetes cluster
+#   hosts: all
+#   become: yes
+#   vars:
+#     kube_api_port: 6443
+#     etcd_client_port: 2379
+#     etcd_peer_port: 2380
+#     cni_udp_port: 8472
+#     kubelet_port: 10250
+#     nodeport_range: "30000-32767"
+#     zookeeper_port: 2181
+#     kafka_port: 9092
+    
+#   tasks:
+#     - name: Ensure firewalld is installed and running
+#       package:
+#         name: firewalld
+#         state: present
+#       notify:
+#         - Enable and start firewalld
+
+#     - name: Create Kubernetes cluster zone
+#       firewalld:
+#         zone: cluster
+#         state: present
+#         permanent: yes
+#       notify:
+#         - Reload firewalld
+
+#     - name: Set Kubernetes cluster zone as default (runtime)
+#       command: firewall-cmd --set-default-zone=cluster
+#       notify:
+#         - Reload firewalld
+
+#     - name: Set Kubernetes cluster zone as default (permanent)
+#       command: firewall-cmd --permanent --set-default-zone=cluster
+#       notify:
+#         - Reload firewalld
+
+#     - name: Open Kubernetes API server port
+#       firewalld:
+#         port: "{{ kube_api_port }}/tcp"
+#         zone: cluster
+#         state: enabled
+#         permanent: yes
+#       notify:
+#         - Reload firewalld
+
+#     - name: Open etcd client port
+#       firewalld:
+#         port: "{{ etcd_client_port }}/tcp"
+#         zone: cluster
+#         state: enabled
+#         permanent: yes
+#       notify:
+#         - Reload firewalld
+
+#     - name: Open etcd peer port
+#       firewalld:
+#         port: "{{ etcd_peer_port }}/tcp"
+#         zone: cluster
+#         state: enabled
+#         permanent: yes
+#       notify:
+#         - Reload firewalld
+
+#     - name: Open CNI (Flannel) UDP port
+#       firewalld:
+#         port: "{{ cni_udp_port }}/udp"
+#         zone: cluster
+#         state: enabled
+#         permanent: yes
+#       notify:
+#         - Reload firewalld
+
+#     - name: Open kubelet port
+#       firewalld:
+#         port: "{{ kubelet_port }}/tcp"
+#         zone: cluster
+#         state: enabled
+#         permanent: yes
+#       notify:
+#         - Reload firewalld
+
+#     - name: Open NodePort range
+#       firewalld:
+#         port: "{{ nodeport_range }}/tcp"
+#         zone: cluster
+#         state: enabled
+#         permanent: yes
+#       notify:
+#         - Reload firewalld
+
+#     - name: Open Zookeeper port
+#       firewalld:
+#         port: "{{ zookeeper_port }}/tcp"
+#         zone: cluster
+#         state: enabled
+#         permanent: yes
+#       notify:
+#         - Reload firewalld
+
+#     - name: Open Kafka port
+#       firewalld:
+#         port: "{{ kafka_port }}/tcp"
+#         zone: cluster
+#         state: enabled
+#         permanent: yes
+#       notify:
+#         - Reload firewalld
+
+#     - name: Allow SSH (ensure we don't lock ourselves out)
+#       firewalld:
+#         service: ssh
+#         zone: cluster
+#         state: enabled
+#         permanent: yes
+#       notify:
+#         - Reload firewalld
+
+#     - name: Display configured firewall rules
+#       command: firewall-cmd --list-all --zone=cluster
+#       register: firewall_status
+#       changed_when: false
+
+#     - name: Show firewall status
+#       debug:
+#         var: firewall_status.stdout
+
+#   handlers:
+#     - name: Enable and start firewalld
+#       systemd:
+#         name: firewalld
+#         enabled: yes
+#         state: started
+#         daemon_reload: yes
+
+#     - name: Reload firewalld
+#       systemd:
+#         name: firewalld
+#         state: reloaded
+
+---
+- name: Configure UFW firewall for Kubernetes
+  hosts: k8s_cluster
   become: yes
+
   tasks:
-    - name: Enable firewalld service
-      service:
-        name: firewalld
-        state: started
-        enabled: yes
+    - name: Install UFW if not present
+      apt:
+        name: ufw
+        state: present
 
-    - name: Allow Kafka ports
-      firewalld:
-        port: 9092/tcp
-        permanent: yes
-        state: enabled
-        immediate: yes
-      when: "'kafka' in group_names"
+    - name: Reset UFW to defaults (optional)
+      ufw:
+        state: reset
+      ignore_errors: yes
 
-    - name: Allow Flask port
-      firewalld:
-        port: 5000/tcp
-        permanent: yes
-        state: enabled
-        immediate: yes
-      when: "'flask' in group_names"
+    - name: Allow SSH
+      ufw:
+        rule: allow
+        name: OpenSSH
 
-    - name: Allow ZooKeeper port
-      firewalld:
-        port: 2181/tcp
-        permanent: yes
-        state: enabled
-        immediate: yes
-      when: "'zookeeper' in group_names"
+    - name: Allow Kubernetes API server
+      ufw:
+        rule: allow
+        port: "6443"
+        proto: "tcp"
 
-    - name: Allow DB port
-      firewalld:
-        port: 5432/tcp
-        permanent: yes
+    - name: Allow etcd client
+      ufw:
+        rule: allow
+        port: "2379"
+        proto: "tcp"
+
+    - name: Allow etcd peer
+      ufw:
+        rule: allow
+        port: "2380"
+        proto: "tcp"
+
+    - name: Allow kubelet API
+      ufw:
+        rule: allow
+        port: "10250"
+        proto: "tcp"
+
+    - name: Allow NodePort range
+      ufw:
+        rule: allow
+        port: "30000:32767"
+        proto: "tcp"
+
+    - name: Allow Flannel CNI
+      ufw:
+        rule: allow
+        port: "8472"
+        proto: "udp"
+
+    - name: Allow Zookeeper
+      ufw:
+        rule: allow
+        port: "2181"
+        proto: "tcp"
+
+    - name: Allow Kafka
+      ufw:
+        rule: allow
+        port: "9092"
+        proto: "tcp"
+
+    - name: Enable UFW
+      ufw:
         state: enabled
-        immediate: yes
-      when: "'db' in group_names"
+        policy: deny
+
+    - name: Show UFW status
+      command: ufw status verbose
+      register: ufw_status
+      changed_when: false
+
+    - name: Display UFW rules
+      debug:
+        var: ufw_status.stdout
