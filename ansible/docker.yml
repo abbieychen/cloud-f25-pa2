@@ -1,0 +1,105 @@
+---
+- name: Install and configure Docker CE on Rocky Linux 9
+  hosts: all
+  become: yes
+  vars:
+    vm1_ip: "192.168.1.100"  # Replace with your actual VM1 IP address
+    docker_version: "24.0"    # Docker version to install
+
+  tasks:
+    - name: Install required dependencies
+      package:
+        name:
+          - yum-utils
+          - device-mapper-persistent-data
+          - lvm2
+        state: present
+
+    - name: Add Docker CE repository
+      package:
+        name: docker-ce
+        state: present
+      environment:
+        # Workaround for Rocky Linux 9 Docker installation
+        DOCKER_CLI_EXPERIMENTAL: enabled
+
+    - name: Add Docker CE repository (alternative method)
+      command: dnf config-manager --add-repo=https://download.docker.com/linux/centos/docker-ce.repo
+      args:
+        creates: /etc/yum.repos.d/docker-ce.repo
+
+    - name: Install Docker CE
+      package:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+        state: present
+
+    - name: Create docker daemon.json directory
+      file:
+        path: /etc/docker
+        state: directory
+        mode: '0755'
+
+    - name: Configure docker daemon.json with insecure registry
+      copy:
+        content: |
+          {
+            "insecure-registries": ["{{ vm1_ip }}:5000"]
+          }
+        dest: /etc/docker/daemon.json
+        mode: '0644'
+      notify:
+        - Restart docker service
+
+    - name: Start and enable Docker service
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Add user to docker group (optional)
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes
+      when: ansible_user != "root"
+
+    - name: Verify Docker installation
+      command: docker --version
+      register: docker_version_result
+      changed_when: false
+
+    - name: Display Docker version
+      debug:
+        var: docker_version_result.stdout
+
+    - name: Verify Docker service status
+      systemd:
+        name: docker
+        state: started
+      register: docker_service_status
+      changed_when: false
+
+    - name: Display Docker service status
+      debug:
+        var: docker_service_status.status.ActiveState
+
+    - name: Test Docker with hello-world
+      command: docker run --rm hello-world
+      register: docker_test_result
+      changed_when: docker_test_result.rc == 0
+      ignore_errors: yes
+
+    - name: Display Docker test result
+      debug:
+        var: docker_test_result.stdout
+      when: docker_test_result.rc == 0
+
+  handlers:
+    - name: Restart docker service
+      systemd:
+        name: docker
+        state: restarted

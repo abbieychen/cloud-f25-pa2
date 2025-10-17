@@ -1,0 +1,271 @@
+---
+- name: Initialize Kubernetes cluster on master node
+  hosts: master
+  become: yes
+  vars:
+    pod_network_cidr: "10.244.0.0/16"
+    api_server_address: "{{ ansible_default_ipv4.address }}"  # Uses master node IP
+    # Or specify manually: api_server_address: "192.168.1.10"
+    registry_nodeport: 30000
+
+  tasks:
+    - name: Create kubeadm configuration file
+      copy:
+        dest: /tmp/kubeadm-config.yaml
+        content: |
+          apiVersion: kubeadm.k8s.io/v1beta3
+          kind: InitConfiguration
+          localAPIEndpoint:
+            advertiseAddress: {{ api_server_address }}
+            bindPort: 6443
+          ---
+          apiVersion: kubeadm.k8s.io/v1beta3
+          kind: ClusterConfiguration
+          kubernetesVersion: v1.28.0
+          controlPlaneEndpoint: "{{ api_server_address }}:6443"
+          networking:
+            serviceSubnet: "10.96.0.0/12"
+            podSubnet: "{{ pod_network_cidr }}"
+          ---
+          apiVersion: kubelet.config.k8s.io/v1beta1
+          kind: KubeletConfiguration
+          cgroupDriver: systemd
+        mode: '0644'
+
+    - name: Initialize Kubernetes cluster with kubeadm
+      command: kubeadm init --config=/tmp/kubeadm-config.yaml
+      args:
+        creates: /etc/kubernetes/admin.conf
+
+    - name: Remove the temporary config file
+      file:
+        path: /tmp/kubeadm-config.yaml
+        state: absent
+
+    - name: Create .kube directory for ubuntu user
+      file:
+        path: /home/ubuntu/.kube
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+
+    - name: Copy admin.conf to ubuntu user's kubeconfig
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/ubuntu/.kube/config
+        remote_src: yes
+        owner: ubuntu
+        group: ubuntu
+        mode: '0600'
+
+    - name: Change ownership of /home/ubuntu/.kube
+      file:
+        path: /home/ubuntu/.kube
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        recurse: yes
+
+    - name: Save kubeadm join command to file
+      shell: |
+        kubeadm token create --print-join-command > /home/ubuntu/join-command.sh
+        chmod +x /home/ubuntu/join-command.sh
+        chown ubuntu:ubuntu /home/ubuntu/join-command.sh
+      args:
+        executable: /bin/bash
+
+    - name: Display join command
+      command: cat /home/ubuntu/join-command.sh
+      register: join_command
+      changed_when: false
+
+    - name: Show join command for reference
+      debug:
+        msg: "Join command: {{ join_command.stdout }}"
+
+    - name: Install Flannel CNI plugin
+      become: yes
+      become_user: ubuntu
+      command: kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Wait for Flannel pods to be created
+      become: yes
+      become_user: ubuntu
+      command: kubectl get pods -n kube-system -l app=flannel
+      register: flannel_pods
+      until: flannel_pods.stdout.find('Running') != -1
+      retries: 10
+      delay: 30
+      changed_when: false
+
+    - name: Optional - Remove master taint to allow scheduling pods
+      become: yes
+      become_user: ubuntu
+      command: kubectl taint nodes {{ inventory_hostname }} node-role.kubernetes.io/control-plane:NoSchedule-
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+      ignore_errors: yes
+
+    - name: Create private Docker registry deployment
+      become: yes
+      become_user: ubuntu
+      copy:
+        dest: /home/ubuntu/private-registry.yaml
+        content: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: private-registry
+            namespace: default
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: private-registry
+            template:
+              metadata:
+                labels:
+                  app: private-registry
+              spec:
+                containers:
+                - name: registry
+                  image: registry:2
+                  ports:
+                  - containerPort: 5000
+                  env:
+                  - name: REGISTRY_HTTP_ADDR
+                    value: "0.0.0.0:5000"
+                  - name: REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY
+                    value: "/var/lib/registry"
+                  volumeMounts:
+                  - name: registry-storage
+                    mountPath: "/var/lib/registry"
+                volumes:
+                - name: registry-storage
+                  emptyDir: {}
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: private-registry
+            namespace: default
+          spec:
+            type: NodePort
+            selector:
+              app: private-registry
+            ports:
+            - port: 5000
+              targetPort: 5000
+              nodePort: {{ registry_nodeport }}
+        mode: '0644'
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Deploy private registry
+      become: yes
+      become_user: ubuntu
+      command: kubectl apply -f /home/ubuntu/private-registry.yaml
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Wait for registry pod to be ready
+      become: yes
+      become_user: ubuntu
+      command: kubectl wait --for=condition=ready pod -l app=private-registry --timeout=300s
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Verify cluster status
+      become: yes
+      become_user: ubuntu
+      command: kubectl get nodes -o wide
+      register: cluster_status
+      changed_when: false
+
+    - name: Display cluster status
+      debug:
+        var: cluster_status.stdout
+
+- name: Join worker nodes to Kubernetes cluster
+  hosts: workers
+  become: yes
+  vars:
+    join_command_file: "/home/ubuntu/join-command.sh"
+
+  tasks:
+    - name: Fetch join command from master node
+      fetch:
+        src: /home/ubuntu/join-command.sh
+        dest: /tmp/join-command-{{ inventory_hostname }}.sh
+        flat: yes
+
+    - name: Copy join command locally
+      copy:
+        src: "/tmp/join-command-{{ inventory_hostname }}.sh"
+        dest: "{{ join_command_file }}"
+        mode: '0755'
+        owner: ubuntu
+        group: ubuntu
+
+    - name: Execute join command on worker node
+      command: "{{ join_command_file }}"
+      args:
+        executable: /bin/bash
+
+    - name: Clean up local join command file
+      file:
+        path: "/tmp/join-command-{{ inventory_hostname }}.sh"
+        state: absent
+
+- name: Verify complete cluster
+  hosts: master
+  become: yes
+
+  tasks:
+    - name: Wait for all nodes to be ready
+      become: yes
+      become_user: ubuntu
+      command: kubectl get nodes
+      register: node_status
+      until: "'NotReady' not in node_status.stdout"
+      retries: 10
+      delay: 30
+      changed_when: false
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Display final cluster status
+      become: yes
+      become_user: ubuntu
+      command: kubectl get nodes -o wide
+      register: final_cluster_status
+      changed_when: false
+
+    - name: Show final cluster status
+      debug:
+        var: final_cluster_status.stdout
+
+    - name: Show all pods in kube-system
+      become: yes
+      become_user: ubuntu
+      command: kubectl get pods -n kube-system -o wide
+      register: system_pods
+      changed_when: false
+
+    - name: Display system pods status
+      debug:
+        var: system_pods.stdout
+
+    - name: Verify private registry service
+      become: yes
+      become_user: ubuntu
+      command: kubectl get svc private-registry -o wide
+      register: registry_service
+      changed_when: false
+
+    - name: Display registry service status
+      debug:
+        var: registry_service.stdout

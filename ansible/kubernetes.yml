@@ -1,0 +1,123 @@
+---
+- name: Install and configure Kubernetes on Rocky Linux 9
+  hosts: all
+  become: yes
+  vars:
+    kube_version: "1.28"  # Specify Kubernetes version
+    container_runtime: "docker"  # Options: docker, containerd, cri-o
+
+  tasks:
+    - name: Disable swap
+      shell: |
+        swapoff -a
+        sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+      args:
+        warn: false
+
+    - name: Load required kernel modules
+      modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - br_netfilter
+        - overlay
+
+    - name: Configure kernel parameters for Kubernetes
+      sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        state: present
+        reload: yes
+      loop:
+        - { key: net.bridge.bridge-nf-call-iptables, value: '1' }
+        - { key: net.bridge.bridge-nf-call-ip6tables, value: '1' }
+        - { key: net.ipv4.ip_forward, value: '1' }
+
+    - name: Install required packages
+      package:
+        name:
+          - curl
+          - gnupg
+          - apt-transport-https
+          - ca-certificates
+        state: present
+
+    - name: Add Kubernetes GPG key
+      rpm_key:
+        key: https://pkgs.k8s.io/core:/stable:/v{{ kube_version }}/rpm/repodata/repomd.xml.key
+        state: present
+
+    - name: Add Kubernetes repository
+      yum_repository:
+        name: kubernetes
+        description: Kubernetes RPM Repository
+        baseurl: https://pkgs.k8s.io/core:/stable:/v{{ kube_version }}/rpm/
+        gpgcheck: yes
+        gpgkey: https://pkgs.k8s.io/core:/stable:/v{{ kube_version }}/rpm/repodata/repomd.xml.key
+        enabled: yes
+        exclude: kubelet kubeadm kubectl
+
+    - name: Install Kubernetes components
+      package:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+        exclude: '*'
+
+    - name: Enable kubelet service
+      systemd:
+        name: kubelet
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Configure kubelet cgroup driver for Docker
+      lineinfile:
+        path: /etc/sysconfig/kubelet
+        line: 'KUBELET_EXTRA_ARGS=--cgroup-driver=systemd'
+        create: yes
+      when: container_runtime == "docker"
+
+    - name: Create kubeadm configuration directory
+      file:
+        path: /etc/kubernetes
+        state: directory
+        mode: '0755'
+
+    - name: Configure kubelet to use systemd cgroup driver
+      lineinfile:
+        path: /var/lib/kubelet/config.yaml
+        regexp: '^cgroupDriver:'
+        line: 'cgroupDriver: systemd'
+        create: yes
+      when: container_runtime != "docker"
+
+    - name: Set SELinux to permissive mode
+      selinux:
+        policy: targeted
+        state: permissive
+
+    - name: Verify Kubernetes components are installed
+      command: "{{ item }} --version"
+      register: version_check
+      loop:
+        - kubeadm
+        - kubectl
+        - kubelet
+      changed_when: false
+
+    - name: Display installed versions
+      debug:
+        msg: "{{ item.item }} version: {{ item.stdout }}"
+      loop: "{{ version_check.results }}"
+
+    - name: Show kubelet status
+      systemd:
+        name: kubelet
+        state: started
+      register: kubelet_status
+
+    - name: Display kubelet status
+      debug:
+        var: kubelet_status.status.ActiveState
