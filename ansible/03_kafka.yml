@@ -1,0 +1,48 @@
+- name: Install Kafka on Kafka nodes
+  hosts: kafka
+  become: yes
+  tasks:
+    - name: Create kafka user
+      user:
+        name: kafka
+        system: yes
+
+    - name: Download Kafka
+      get_url:
+        url: https://downloads.apache.org/kafka/3.8.0/kafka_2.13-3.8.0.tgz
+        dest: /opt/kafka.tgz
+
+    - name: Extract Kafka
+      unarchive:
+        src: /opt/kafka.tgz
+        dest: /opt/
+        remote_src: yes
+        owner: kafka
+        group: kafka
+
+    - name: Symlink Kafka
+      file:
+        src: /opt/kafka_2.13-3.8.0
+        dest: /opt/kafka
+        state: link
+        force: yes
+
+    - name: Ensure Kafka config directory exists
+      file:
+        path: /opt/kafka/config
+        state: directory
+        owner: kafka
+        group: kafka
+        mode: '0755'
+
+
+    - name: Configures Kafka server.properties
+      template: 
+        src: server.properties.j2
+        dest: /opt/kafka/config/server.properties
+        owner: kafka
+        group: kafka
+      vars: 
+        broker_id: "{{ kafka_broker_id }}"
+        zookeeper_ip: "{{ zookeeper_host }}"
+## Generated with the help of ChatGPT

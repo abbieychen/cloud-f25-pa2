@@ -17,7 +17,7 @@
       openstack.cloud.server:
         cloud: "{{ cloud_name }}"
         state: present
-        name: kafka-vm1-team6
+        name: vm1-team6
         image: "{{ image_name }}"
         flavor: m1.large
         network: "{{ net_name }}"
@@ -39,9 +39,9 @@
         auto_ip: false
         wait: true
       loop:
-        - kafka-vm2-team6
-        - database-vm-team6
-        - flask-vm-team6
-        - subscriber-vm-team6
+        - vm2-team6
+        - vm3-team6
+        - vm4-team6
+        - vm5-team6
       register: others
     
