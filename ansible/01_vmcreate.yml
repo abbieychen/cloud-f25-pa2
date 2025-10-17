@@ -1,0 +1,47 @@
+
+# ## Generated with the help of ChatGPT
+
+- name: Create VMs (private-only access)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  collections: [openstack.cloud]
+  vars:
+    cloud_name: openstack
+    image_name: CC-Ubuntu24.04
+    net_name: CH-822922-net
+    key_name: abbie
+    sec_group: default
+  tasks:
+    - name: Create VM1 (m1.large)
+      openstack.cloud.server:
+        cloud: "{{ cloud_name }}"
+        state: present
+        name: kafka-vm1-team6
+        image: "{{ image_name }}"
+        flavor: m1.large
+        network: "{{ net_name }}"
+        key_name: "{{ key_name }}"
+        security_groups: ["{{ sec_group }}"]
+        auto_ip: false
+        wait: true
+      register: vm1
+    - name: Create remaining VMs (m1.medium)
+      openstack.cloud.server:
+        cloud: "{{ cloud_name }}"
+        state: present
+        name: "{{ item }}"
+        image: f0c599f7-6dff-4f81-acec-851bcb5995cd
+        flavor: reservation:97738dba-7dcf-40d3-8618-a78703b1ddfc
+        network: "{{ net_name }}"
+        key_name: "{{ key_name }}"
+        security_groups: ["{{ sec_group }}"]
+        auto_ip: false
+        wait: true
+      loop:
+        - kafka-vm2-team6
+        - database-vm-team6
+        - flask-vm-team6
+        - subscriber-vm-team6
+      register: others
+    
