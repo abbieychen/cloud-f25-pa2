@@ -1,0 +1,47 @@
+---
+- name: Build and push Docker images
+  hosts: k8s_cluster
+  become: yes
+  vars:
+    registry_ip: "192.168.5.31:5000"
+    
+  tasks:
+    - name: Copy application files to nodes
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: /home/ubuntu/
+        owner: ubuntu
+        group: ubuntu
+      loop:
+        - publisher/
+        - subscriber/
+        - webserver/
+
+    - name: Build Kafka publisher image
+      ansible.builtin.shell:
+        cmd: |
+          cd /home/ubuntu/publisher
+          docker build -t {{ registry_ip }}/kafka-publisher:latest .
+        become: yes
+
+    - name: Build Kafka subscriber image
+      ansible.builtin.shell:
+        cmd: |
+          cd /home/ubuntu/subscriber
+          docker build -t {{ registry_ip }}/kafka-subscriber:latest .
+        become: yes
+
+    - name: Build Flask webserver image
+      ansible.builtin.shell:
+        cmd: |
+          cd /home/ubuntu/webserver
+          docker build -t {{ registry_ip }}/flask-webserver:latest .
+        become: yes
+
+    - name: Push images to registry
+      ansible.builtin.shell:
+        cmd: |
+          docker push {{ registry_ip }}/kafka-publisher:latest
+          docker push {{ registry_ip }}/kafka-subscriber:latest
+          docker push {{ registry_ip }}/flask-webserver:latest
+        become: yes

@@ -1,0 +1,41 @@
+- name: Configure firewalld
+  hosts: all
+  become: yes
+  tasks:
+    - name: Enable firewalld service
+      service:
+        name: firewalld
+        state: started
+        enabled: yes
+
+    - name: Allow Kafka ports
+      firewalld:
+        port: 9092/tcp
+        permanent: yes
+        state: enabled
+        immediate: yes
+      when: "'kafka' in group_names"
+
+    - name: Allow Flask port
+      firewalld:
+        port: 5000/tcp
+        permanent: yes
+        state: enabled
+        immediate: yes
+      when: "'flask' in group_names"
+
+    - name: Allow ZooKeeper port
+      firewalld:
+        port: 2181/tcp
+        permanent: yes
+        state: enabled
+        immediate: yes
+      when: "'zookeeper' in group_names"
+
+    - name: Allow DB port
+      firewalld:
+        port: 5432/tcp
+        permanent: yes
+        state: enabled
+        immediate: yes
+      when: "'db' in group_names"

@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sensor-publisher-{{ TOPIC }}-{{ TIMESTAMP }}
+spec:
+  template:
+    spec:
+      containers:
+      - name: publisher
+        image: 192.168.1.100:30000/sensor-publisher:latest
+        command: ["python", "publisher.py"]
+        args:
+          - "--topic"
+          - "{{ TOPIC }}"
+          - "--rate"
+          - "{{ RATE }}"
+          - "--broker-list"
+          - "kafka-service:9092"
+        env:
+        - name: KAFKA_TOPIC
+          value: "{{ TOPIC }}"
+        - name: PUBLISH_RATE
+          value: "{{ RATE }}"
+        - name: KAFKA_BROKERS
+          value: "kafka-service:9092"
+      restartPolicy: Never
+  backoffLimit: 3

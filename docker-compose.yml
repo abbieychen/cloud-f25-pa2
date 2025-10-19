@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  publisher-weather:
+    build: 
+      context: ./publisher
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_TOPIC: weather
+      KAFKA_BROKERS: kafka:9092
+      PUBLISH_RATE: 2.0
+    restart: unless-stopped
+
+  publisher-humidity:
+    build:
+      context: ./publisher
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_TOPIC: humidity
+      KAFKA_BROKERS: kafka:9092
+      PUBLISH_RATE: 1.5
+    restart: unless-stopped
+
+  publisher-airquality:
+    build:
+      context: ./publisher
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_TOPIC: air_quality
+      KAFKA_BROKERS: kafka:9092
+      PUBLISH_RATE: 1.0
+    restart: unless-stopped
+
+  subscriber:
+    build:
+      context: ./subscriber
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_TOPICS: "weather humidity air_quality"
+      KAFKA_BROKERS: kafka:9092
+      DB_PATH: /data/sensor_data.db
+    volumes:
+      - sensor_data:/data
+    restart: unless-stopped
+
+  webserver:
+    build:
+      context: ./webserver
+    depends_on:
+      - subscriber
+    ports:
+      - "5000:5000"
+    environment:
+      DB_PATH: /data/sensor_data.db
+    volumes:
+      - sensor_data:/data
+    restart: unless-stopped
+
+volumes:
+  sensor_data:

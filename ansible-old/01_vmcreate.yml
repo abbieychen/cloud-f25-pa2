@@ -1,0 +1,48 @@
+
+# ## Generated with the help of ChatGPT
+
+- name: Create VMs (private-only access)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  collections: [openstack.cloud]
+  vars:
+    cloud_name: openstack
+    image_name: CC-Ubuntu24.04
+    net_name: CH-822922-net
+    key_name: abbie
+    sec_group: default
+    public_key: AAAAB3NzaC1yc2EAAAADAQABAAABAQDJbPCmevNgY/FOvhKNqd9wHBKduiUeI/UoPLwBal4djGJZnV9GH1X5v+hHkt7pWWFqi5yVvVl4c+M6ht9XG87YvdnTmnyx/XhH9XVb8dn1GZeLSZDjJ39WwqKkKbYG8qWx4mEbcqaMH300f3DRC6A1ejUmtfq7LCx41O7xccUgUeYROJNyTrQowFGj5aRHrtwRRDtvDxStCalmmI52s3JFXZa9Rx54QM0zGRip/QNaAjHDeXRd3o51vb7DaPmQO0NUNtlz9iYWywMENlp+pXBFfAgxgE2PbyiYM4RTq0OlDQZx86/EyCR7XWijtW7X1p9KQVrOPUa0WnRUlo9cs2sR
+  tasks:
+    - name: Create VM1 (m1.large)
+      openstack.cloud.server:
+        cloud: "{{ cloud_name }}"
+        state: present
+        name: vm1-team6
+        image: "{{ image_name }}"
+        flavor: m1.large
+        network: "{{ net_name }}"
+        key_name: "{{ key_name }}"
+        security_groups: ["{{ sec_group }}"]
+        auto_ip: false
+        wait: true
+      register: vm1
+    - name: Create remaining VMs (m1.medium)
+      openstack.cloud.server:
+        cloud: "{{ cloud_name }}"
+        state: present
+        name: "{{ item }}"
+        image: f0c599f7-6dff-4f81-acec-851bcb5995cd
+        flavor: reservation:97738dba-7dcf-40d3-8618-a78703b1ddfc
+        network: "{{ net_name }}"
+        key_name: "{{ key_name }}"
+        security_groups: ["{{ sec_group }}"]
+        auto_ip: false
+        wait: true
+      loop:
+        - vm2-team6
+        - vm3-team6
+        - vm4-team6
+        - vm5-team6
+      register: others
+    
