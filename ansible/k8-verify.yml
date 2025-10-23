@@ -1,0 +1,99 @@
+---
+- name: Verify Kubernetes cluster functionality
+  hosts: k8s_master
+  become: yes
+
+  tasks:
+    - name: Check cluster nodes
+      become: yes
+      become_user: ubuntu
+      command: kubectl get nodes
+      register: nodes
+      changed_when: false
+
+    - name: Display nodes
+      debug:
+        var: nodes.stdout
+
+    - name: Check system pods
+      become: yes
+      become_user: ubuntu
+      command: kubectl get pods --all-namespaces
+      register: pods
+      changed_when: false
+
+    - name: Display pods
+      debug:
+        var: pods.stdout
+
+    - name: Test cluster with a simple deployment
+      become: yes
+      become_user: ubuntu
+      copy:
+        dest: /home/ubuntu/test-deployment.yaml
+        content: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: nginx-test
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: nginx-test
+            template:
+              metadata:
+                labels:
+                  app: nginx-test
+              spec:
+                containers:
+                - name: nginx
+                  image: nginx:alpine
+                  ports:
+                  - containerPort: 80
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: nginx-test
+          spec:
+            selector:
+              app: nginx-test
+            ports:
+            - port: 80
+              targetPort: 80
+            type: NodePort
+        mode: '0644'
+
+    - name: Apply test deployment
+      become: yes
+      become_user: ubuntu
+      command: kubectl apply -f /home/ubuntu/test-deployment.yaml
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Wait for test deployment to be ready
+      become: yes
+      become_user: ubuntu
+      command: kubectl wait --for=condition=available deployment/nginx-test --timeout=120s
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+
+    - name: Get test service details
+      become: yes
+      become_user: ubuntu
+      command: kubectl get svc nginx-test
+      register: test_service
+      changed_when: false
+
+    - name: Display test service
+      debug:
+        var: test_service.stdout
+
+    - name: Clean up test deployment
+      become: yes
+      become_user: ubuntu
+      command: kubectl delete -f /home/ubuntu/test-deployment.yaml
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+      ignore_errors: yes

@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sensor-subscriber
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sensor-subscriber
+  template:
+    metadata:
+      labels:
+        app: sensor-subscriber
+    spec:
+      containers:
+      - name: subscriber
+        image: 192.168.1.100:30000/sensor-subscriber:latest
+        env:
+        - name: KAFKA_BROKERS
+          value: "kafka-service:9092"
+        - name: KAFKA_TOPICS
+          value: "weather humidity air_quality"
+        - name: DB_PATH
+          value: "/data/sensor_data.db"
+        volumeMounts:
+        - name: data-storage
+          mountPath: /data
+      volumes:
+      - name: data-storage
+        persistentVolumeClaim:
+          claimName: sensor-data-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sensor-data-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

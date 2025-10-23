@@ -1,39 +1,29 @@
 #!/usr/bin/env python3
-import argparse
 import json
-import random
 import time
-import sys
+import random
+import argparse
+import os
 from datetime import datetime
 from kafka import KafkaProducer
 import logging
-import os
 
-# Configuration from environment variables with defaults
-BROKER_LIST = os.getenv('BROKER_LIST', 'localhost:9092')
-TOPIC = os.getenv('TOPIC', 'weather')
-RATE = float(os.getenv('RATE', '1.0'))
-TOPIC_PREFIX = os.getenv('TOPIC_PREFIX', 'sensor')
-LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
-
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class SensorDataPublisher:
-    def __init__(self, broker_list, topic_prefix="sensor"):
+    def __init__(self, broker_list, topic, rate):
         self.broker_list = broker_list
-        self.topic_prefix = topic_prefix
+        self.topic = topic
+        self.rate = rate  # messages per second
         self.producer = None
         
     def connect(self):
-        """Connect to Kafka broker"""
         try:
             self.producer = KafkaProducer(
                 bootstrap_servers=self.broker_list,
                 value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-                acks='all',
-                retries=3
+                acks='all'
             )
             logger.info(f"Connected to Kafka brokers: {self.broker_list}")
             return True
@@ -41,127 +31,89 @@ class SensorDataPublisher:
             logger.error(f"Failed to connect to Kafka: {e}")
             return False
     
-    def generate_weather_data(self, sensor_id):
-        """Generate fake weather data"""
-        return {
-            "sensor_id": sensor_id,
-            "temperature": round(random.uniform(-10, 35), 2),  # Celsius
-            "humidity": round(random.uniform(30, 90), 2),      # Percentage
-            "pressure": round(random.uniform(980, 1020), 2),   # hPa
-            "wind_speed": round(random.uniform(0, 50), 2),     # km/h
-            "condition": random.choice(["sunny", "cloudy", "rainy", "snowy"]),
-            "timestamp": datetime.utcnow().isoformat()
+    def generate_sensor_data(self, topic):
+        base_data = {
+            'timestamp': datetime.utcnow().isoformat(),
+            'sensor_id': f"sensor_{random.randint(1000, 9999)}"
         }
+        
+        if topic == 'weather':
+            data = {
+                **base_data,
+                'temperature': round(random.uniform(-10, 40), 2),
+                'humidity': round(random.uniform(0, 100), 2),
+                'pressure': round(random.uniform(980, 1050), 2),
+                'wind_speed': round(random.uniform(0, 100), 2)
+            }
+        elif topic == 'humidity':
+            data = {
+                **base_data,
+                'humidity': round(random.uniform(0, 100), 2),
+                'dew_point': round(random.uniform(-10, 30), 2),
+                'absolute_humidity': round(random.uniform(0, 30), 2)
+            }
+        elif topic == 'air_quality':
+            data = {
+                **base_data,
+                'pm2_5': round(random.uniform(0, 300), 2),
+                'pm10': round(random.uniform(0, 500), 2),
+                'co2': round(random.uniform(300, 2000), 2),
+                'voc': round(random.uniform(0, 500), 2)
+            }
+        else:  # generic sensor
+            data = {
+                **base_data,
+                'value': round(random.uniform(0, 100), 2),
+                'unit': 'units'
+            }
+        
+        return data
     
-    def generate_humidity_data(self, sensor_id):
-        """Generate fake humidity data"""
-        return {
-            "sensor_id": sensor_id,
-            "humidity": round(random.uniform(20, 95), 2),
-            "temperature": round(random.uniform(15, 30), 2),
-            "location": random.choice(["indoor", "outdoor"]),
-            "unit": "percentage",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    
-    def generate_air_quality_data(self, sensor_id):
-        """Generate fake air quality data"""
-        return {
-            "sensor_id": sensor_id,
-            "pm2_5": round(random.uniform(0, 150), 2),        # μg/m³
-            "pm10": round(random.uniform(0, 200), 2),         # μg/m³
-            "co2": round(random.uniform(300, 1500), 2),       # ppm
-            "voc": round(random.uniform(0, 500), 2),          # ppb
-            "aqi": random.randint(0, 300),
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    
-    def generate_power_data(self, sensor_id):
-        """Generate fake power consumption data"""
-        return {
-            "sensor_id": sensor_id,
-            "voltage": round(random.uniform(220, 240), 2),    # Volts
-            "current": round(random.uniform(0, 15), 2),       # Amps
-            "power": round(random.uniform(0, 3500), 2),       # Watts
-            "energy": round(random.uniform(0, 100), 2),       # kWh
-            "power_factor": round(random.uniform(0.8, 1.0), 3),
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    
-    def publish_data(self, topic, rate, duration=None):
-        """Publish sensor data at specified rate"""
-        if not self.producer:
-            logger.error("Not connected to Kafka")
+    def publish(self):
+        if not self.connect():
             return
         
-        sensor_id = f"{topic}_sensor_{random.randint(1000, 9999)}"
-        data_generators = {
-            "weather": self.generate_weather_data,
-            "humidity": self.generate_humidity_data,
-            "air-quality": self.generate_air_quality_data,
-            "power": self.generate_power_data
-        }
-        
-        generator = data_generators.get(topic, self.generate_weather_data)
-        full_topic = f"{self.topic_prefix}.{topic}" if self.topic_prefix else topic
-        
-        logger.info(f"Starting to publish {topic} data to {full_topic} at {rate} msg/sec")
-        
-        start_time = time.time()
-        message_count = 0
+        interval = 1.0 / self.rate
+        logger.info(f"Starting to publish {self.rate} messages/sec to topic '{self.topic}'")
         
         try:
             while True:
-                if duration and (time.time() - start_time) > duration:
-                    break
+                data = self.generate_sensor_data(self.topic)
+                future = self.producer.send(self.topic, data)
                 
-                # Generate and send data
-                data = generator(sensor_id)
-                self.producer.send(full_topic, value=data)
-                message_count += 1
+                # Optional: wait for acknowledgment
+                future.get(timeout=10)
                 
-                if message_count % 10 == 0:
-                    logger.info(f"Published {message_count} messages to {full_topic}")
-                
-                # Wait to maintain rate
-                time.sleep(1.0 / rate)
+                logger.info(f"Published to {self.topic}: {data}")
+                time.sleep(interval)
                 
         except KeyboardInterrupt:
-            logger.info("Publisher stopped by user")
+            logger.info("Stopping publisher...")
         except Exception as e:
             logger.error(f"Error during publishing: {e}")
         finally:
-            self.producer.flush()
-            logger.info(f"Total messages published: {message_count}")
+            if self.producer:
+                self.producer.close()
 
 def main():
-    parser = argparse.ArgumentParser(description='Kafka Sensor Data Publisher')
-    parser.add_argument('--broker-list', default=BROKER_LIST, help='Kafka broker list')
-    parser.add_argument('--topic', default=TOPIC, choices=['weather', 'humidity', 'air-quality', 'power'],
-                       help='Sensor topic to publish')
-    parser.add_argument('--rate', type=float, default=1.0, help='Messages per second')
-    parser.add_argument('--duration', type=int, help='Duration to run in seconds (optional)')
-    parser.add_argument('--topic-prefix', default='sensor', help='Topic prefix')
-    parser.add_argument('--log-level', default='INFO', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
-                       help='Logging level')
+    parser = argparse.ArgumentParser(description='Sensor Data Publisher')
+    parser.add_argument('--topic', type=str, required=True,
+                       help='Kafka topic to publish to')
+    parser.add_argument('--rate', type=float, default=1.0,
+                       help='Publishing rate in messages per second')
+    parser.add_argument('--broker-list', type=str, 
+                       default='localhost:9092',
+                       help='Kafka broker list (comma-separated)')
     
     args = parser.parse_args()
     
-    # Set log level
-    logging.getLogger().setLevel(getattr(logging, args.log_level))
+    # Environment variables override command-line arguments
+    topic = os.getenv('KAFKA_TOPIC', args.topic)
+    rate = float(os.getenv('PUBLISH_RATE', args.rate))
+    broker_list = os.getenv('KAFKA_BROKERS', args.broker_list).split(',')
     
-    # Create publisher
-    publisher = SensorDataPublisher(
-        broker_list=args.broker_list.split(','),
-        topic_prefix=args.topic_prefix
-    )
-    
-    # Connect to Kafka
-    if not publisher.connect():
-        sys.exit(1)
-    
-    # Start publishing
-    publisher.publish_data(args.topic, args.rate, args.duration)
+    publisher = SensorDataPublisher(broker_list, topic, rate)
+    publisher.publish()
 
 if __name__ == "__main__":
     main()

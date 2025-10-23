@@ -1,81 +1,55 @@
 #!/usr/bin/env python3
-import argparse
 import json
+import argparse
+import os
 import logging
-import sys
 from kafka import KafkaConsumer
 import sqlite3
-import os
 from datetime import datetime
 
-
-# Configuration from environment variables with defaults
-BROKER_LIST = os.getenv('BROKER_LIST', 'localhost:9092')
-TOPIC = os.getenv('TOPIC', 'weather')
-RATE = float(os.getenv('RATE', '1.0'))
-TOPIC_PREFIX = os.getenv('TOPIC_PREFIX', 'sensor')
-LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
-
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class SensorDataSubscriber:
-    def __init__(self, broker_list, topics, db_path="/data/sensor_data.db"):
+    def __init__(self, broker_list, topics, db_path):
         self.broker_list = broker_list
         self.topics = topics
         self.db_path = db_path
         self.consumer = None
-        self.setup_database()
+        self.init_database()
     
-    def setup_database(self):
-        """Setup SQLite database and tables"""
+    def init_database(self):
+        """Initialize SQLite database with sensor_data table"""
         try:
-            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            # Create table for sensor data
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS sensor_data (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     topic TEXT NOT NULL,
                     sensor_id TEXT NOT NULL,
-                    data_json TEXT NOT NULL,
                     timestamp TEXT NOT NULL,
-                    received_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    data_json TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            ''')
-            
-            # Create index for better query performance
-            cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_topic_sensor 
-                ON sensor_data(topic, sensor_id)
-            ''')
-            
-            cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_timestamp 
-                ON sensor_data(timestamp)
             ''')
             
             conn.commit()
             conn.close()
-            logger.info(f"Database setup completed: {self.db_path}")
-            
+            logger.info(f"Database initialized at {self.db_path}")
         except Exception as e:
-            logger.error(f"Database setup failed: {e}")
-            raise
+            logger.error(f"Failed to initialize database: {e}")
     
     def connect(self):
-        """Connect to Kafka broker"""
         try:
             self.consumer = KafkaConsumer(
                 *self.topics,
                 bootstrap_servers=self.broker_list,
-                value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+                value_deserializer=lambda v: json.loads(v.decode('utf-8')),
                 auto_offset_reset='earliest',
                 enable_auto_commit=True,
-                group_id='sensor-data-consumer'
+                group_id='sensor-consumer-group'
             )
             logger.info(f"Connected to Kafka brokers: {self.broker_list}")
             logger.info(f"Subscribed to topics: {self.topics}")
@@ -85,87 +59,70 @@ class SensorDataSubscriber:
             return False
     
     def store_data(self, topic, data):
-        """Store sensor data in database"""
+        """Store sensor data in SQLite database"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
             cursor.execute('''
-                INSERT INTO sensor_data (topic, sensor_id, data_json, timestamp)
+                INSERT INTO sensor_data (topic, sensor_id, timestamp, data_json)
                 VALUES (?, ?, ?, ?)
-            ''', (topic, data.get('sensor_id', 'unknown'), json.dumps(data), 
-                  data.get('timestamp', datetime.utcnow().isoformat())))
+            ''', (topic, data.get('sensor_id', 'unknown'), 
+                  data.get('timestamp', ''), json.dumps(data)))
             
             conn.commit()
             conn.close()
             return True
-            
         except Exception as e:
-            logger.error(f"Failed to store data: {e}")
+            logger.error(f"Failed to store data in database: {e}")
             return False
     
-    def process_messages(self):
-        """Process incoming Kafka messages"""
-        if not self.consumer:
-            logger.error("Not connected to Kafka")
+    def consume(self):
+        if not self.connect():
             return
         
-        message_count = 0
         logger.info("Starting to consume messages...")
-        
         try:
             for message in self.consumer:
-                topic = message.topic
                 data = message.value
+                topic = message.topic
+                
+                logger.info(f"Received from {topic}: {data}")
                 
                 # Store in database
                 if self.store_data(topic, data):
-                    message_count += 1
+                    logger.debug(f"Stored data from {topic} in database")
+                else:
+                    logger.error(f"Failed to store data from {topic}")
                     
-                    if message_count % 10 == 0:
-                        logger.info(f"Processed {message_count} messages. Latest: {topic} from {data.get('sensor_id', 'unknown')}")
-                
         except KeyboardInterrupt:
-            logger.info("Subscriber stopped by user")
+            logger.info("Stopping consumer...")
         except Exception as e:
-            logger.error(f"Error during message processing: {e}")
+            logger.error(f"Error during consumption: {e}")
         finally:
-            self.consumer.close()
-            logger.info(f"Total messages processed: {message_count}")
+            if self.consumer:
+                self.consumer.close()
 
 def main():
-    parser = argparse.ArgumentParser(description='Kafka Sensor Data Subscriber')
-    parser.add_argument('--broker-list', default=BROKER_LIST, help='Kafka broker list')
-    parser.add_argument('--topic', default=TOPIC, choices=['weather', 'humidity', 'air-quality', 'power'],
-                       help='Sensor topic to publish')
-    parser.add_argument('--db-path', default='/data/sensor_data.db', help='SQLite database path')
-    parser.add_argument('--log-level', default='INFO', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
-                       help='Logging level')
+    parser = argparse.ArgumentParser(description='Sensor Data Subscriber')
+    parser.add_argument('--topics', type=str, nargs='+', required=True,
+                       help='Kafka topics to subscribe to')
+    parser.add_argument('--broker-list', type=str, 
+                       default='localhost:9092',
+                       help='Kafka broker list (comma-separated)')
+    parser.add_argument('--db-path', type=str,
+                       default='/data/sensor_data.db',
+                       help='Path to SQLite database file')
     
     args = parser.parse_args()
     
-    # Set log level
-    logging.getLogger().setLevel(getattr(logging, args.log_level))
+    # Environment variables override command-line arguments
+    topics = os.getenv('KAFKA_TOPICS', '').split() or args.topics
+    broker_list = os.getenv('KAFKA_BROKERS', args.broker_list).split(',')
+    db_path = os.getenv('DB_PATH', args.db_path)
     
-    # Parse topics (support both comma-separated and wildcard)
-    if ',' in args.topics:
-        topics = [topic.strip() for topic in args.topics.split(',')]
-    else:
-        topics = [args.topics]
-    
-    # Create subscriber
-    subscriber = SensorDataSubscriber(
-        broker_list=args.broker_list.split(','),
-        topics=topics,
-        db_path=args.db_path
-    )
-    
-    # Connect to Kafka
-    if not subscriber.connect():
-        sys.exit(1)
-    
-    # Start consuming
-    subscriber.process_messages()
+    subscriber = SensorDataSubscriber(broker_list, topics, db_path)
+    subscriber.consume()
 
 if __name__ == "__main__":
     main()

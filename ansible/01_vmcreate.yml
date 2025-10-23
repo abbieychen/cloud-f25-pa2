@@ -31,7 +31,7 @@
       openstack.cloud.server:
         cloud: "{{ cloud_name }}"
         state: present
-        name: vm1-team6
+        name: team6-vm1
         image: "{{ image_name }}"
         flavor: m1.large
         network: "{{ net_name }}"
@@ -53,9 +53,9 @@
         auto_ip: false
         wait: true
       loop:
-        - vm2-team6
-        - vm3-team6
-        - vm4-team6
-        - vm5-team6
+        - team6-vm2
+        - team6-vm3
+        - team6-vm4
+        - team6-vm5
       register: others
     

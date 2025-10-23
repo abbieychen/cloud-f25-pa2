@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sensor-webserver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sensor-webserver
+  template:
+    metadata:
+      labels:
+        app: sensor-webserver
+    spec:
+      containers:
+      - name: webserver
+        image: 192.168.1.100:30000/sensor-webserver:latest
+        ports:
+        - containerPort: 5000
+        env:
+        - name: DB_PATH
+          value: "/data/sensor_data.db"
+        volumeMounts:
+        - name: data-storage
+          mountPath: /data
+      volumes:
+      - name: data-storage
+        persistentVolumeClaim:
+          claimName: sensor-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webserver-service
+spec:
+  selector:
+    app: sensor-webserver
+  ports:
+  - port: 5000
+    targetPort: 5000
+    nodePort: 30001
+  type: NodePort

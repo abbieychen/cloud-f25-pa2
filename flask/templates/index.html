@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sensor Data Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .dashboard { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .card { border: 1px solid #ddd; padding: 15px; border-radius: 5px; }
+        .data-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        .data-table th, .data-table td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        .data-table th { background-color: #f2f2f2; }
+        .topic-filter { margin: 10px 0; }
+        .stats { background-color: #f8f9fa; padding: 10px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>Sensor Data Dashboard</h1>
+    
+    <div class="stats" id="stats">
+        Loading statistics...
+    </div>
+
+    <div class="topic-filter">
+        <label for="topicSelect">Filter by Topic:</label>
+        <select id="topicSelect" onchange="loadData()">
+            <option value="all">All Topics</option>
+        </select>
+        <button onclick="loadData()">Refresh</button>
+    </div>
+
+    <div class="dashboard">
+        <div class="card">
+            <h2>Recent Sensor Data</h2>
+            <div id="dataTable">
+                Loading data...
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>Data Distribution by Topic</h2>
+            <canvas id="topicChart" width="400" height="300"></canvas>
+        </div>
+    </div>
+
+    <script>
+        let topicChart = null;
+        
+        async function loadData() {
+            const topic = document.getElementById('topicSelect').value;
+            
+            try {
+                // Load data based on topic selection
+                const url = topic === 'all' ? '/api/data' : `/api/data/${topic}`;
+                const response = await fetch(url);
+                const result = await response.json();
+                
+                if (result.success) {
+                    displayData(result.data);
+                } else {
+                    document.getElementById('dataTable').innerHTML = 'Error loading data';
+                }
+                
+                // Always update stats and topics
+                await loadStats();
+                await loadTopics();
+                
+            } catch (error) {
+                console.error('Error loading data:', error);
+                document.getElementById('dataTable').innerHTML = 'Error loading data';
+            }
+        }
+        
+        async function loadStats() {
+            try {
+                const response = await fetch('/api/stats');
+                const result = await response.json();
+                
+                if (result.success) {
+                    const stats = result.stats;
+                    document.getElementById('stats').innerHTML = `
+                        Total Records: ${stats.total_records} | 
+                        Latest Update: ${stats.latest_update || 'N/A'}
+                    `;
+                    
+                    // Update chart
+                    updateTopicChart(stats.records_by_topic);
+                }
+            } catch (error) {
+                console.error('Error loading stats:', error);
+            }
+        }
+        
+        async function loadTopics() {
+            try {
+                const response = await fetch('/api/topics');
+                const result = await response.json();
+                
+                if (result.success) {
+                    const topicSelect = document.getElementById('topicSelect');
+                    // Keep current selection
+                    const currentTopic = topicSelect.value;
+                    
+                    // Update options (keep "all" option)
+                    topicSelect.innerHTML = '<option value="all">All Topics</option>';
+                    result.topics.forEach(topic => {
+                        const option = document.createElement('option');
+                        option.value = topic;
+                        option.textContent = topic;
+                        topicSelect.appendChild(option);
+                    });
+                    
+                    // Restore selection if possible
+                    if (currentTopic && Array.from(topicSelect.options).some(opt => opt.value === currentTopic)) {
+                        topicSelect.value = currentTopic;
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading topics:', error);
+            }
+        }
+        
+        function displayData(data) {
+            const container = document.getElementById('dataTable');
+            
+            if (data.length === 0) {
+                container.innerHTML = '<p>No data available</p>';
+                return;
+            }
+            
+            let html = `
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Topic</th>
+                            <th>Sensor ID</th>
+                            <th>Timestamp</th>
+                            <th>Data</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+            
+            data.slice(0, 20).forEach(item => {
+                html += `
+                    <tr>
+                        <td>${item.topic}</td>
+                        <td>${item.sensor_id}</td>
+                        <td>${new Date(item.timestamp).toLocaleString()}</td>
+                        <td>${JSON.stringify(item.data)}</td>
+                    </tr>
+                `;
+            });
+            
+            html += `</tbody></table>`;
+            
+            if (data.length > 20) {
+                html += `<p>Showing 20 of ${data.length} records</p>`;
+            }
+            
+            container.innerHTML = html;
+        }
+        
+        function updateTopicChart(topicCounts) {
+            const ctx = document.getElementById('topicChart').getContext('2d');
+            
+            // Destroy previous chart if it exists
+            if (topicChart) {
+                topicChart.destroy();
+            }
+            
+            const topics = Object.keys(topicCounts);
+            const counts = Object.values(topicCounts);
+            
+            topicChart = new Chart(ctx, {
+                type: 'pie',
+                data: {
+                    labels: topics,
+                    datasets: [{
+                        data: counts,
+                        backgroundColor: [
+                            '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0',
+                            '#9966FF', '#FF9F40', '#FF6384', '#C9CBCF'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                        },
+                        title: {
+                            display: true,
+                            text: 'Records by Topic'
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Load initial data
+        loadData();
+        
+        // Refresh data every 10 seconds
+        setInterval(loadData, 10000);
+    </script>
+</body>
+</html>
